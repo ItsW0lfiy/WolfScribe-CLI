@@ -35,10 +35,10 @@ fn cuda(model_dir: &Path) -> Result<LoadedModel> {
     // report CUDA when ONNX Runtime couldn't register the CUDA provider.
     // ONNX Runtime can still assign unsupported nodes to its CPU provider.
     let config = ExecutionConfig::new().with_custom_configure(|builder| {
-        builder.with_execution_providers([
+        Ok(builder.with_execution_providers([
             ort::ep::CUDA::default().build().error_on_failure(),
             ort::ep::CPU::default().build().error_on_failure(),
-        ])
+        ])?)
     });
     let model = ParakeetTDT::from_pretrained(model_dir, Some(config))
         .map_err(|error| anyhow!("CUDA provider/model initialization failed: {error}"))?;
