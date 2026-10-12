@@ -1,12 +1,14 @@
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
-use parakeet_rs::{ParakeetTDT, TimestampMode, Transcriber};
+use backend::Device;
+use parakeet_rs::{TimestampMode, Transcriber};
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::time::Instant;
 
+mod backend;
 mod model_download;
 
 const SAMPLE_RATE: usize = 16_000;
@@ -25,6 +27,10 @@ struct Args {
     /// Never download model files. Fail when required files are not installed.
     #[arg(long)]
     offline: bool,
+
+    /// Inference backend: auto tries CUDA in CUDA-enabled builds, then CPU.
+    #[arg(long, value_enum, default_value_t = Device::Auto)]
+    device: Device,
 
     /// Number of seconds assigned to each segment.
     #[arg(long, default_value_t = 30)]
@@ -207,8 +213,9 @@ fn main() -> Result<()> {
     let context_size = args.context_seconds * SAMPLE_RATE;
 
     println!("Loading Parakeet TDT from {}", model_dir.display());
-    let mut model = ParakeetTDT::from_pretrained(&model_dir, None)
-        .map_err(|e| anyhow!("Failed loading Parakeet: {e}"))?;
+    let loaded = backend::load_model(&model_dir, args.device)?;
+    println!("Backend: {}", loaded.backend);
+    let mut model = loaded.model;
     println!("Model loaded in {:.2}s", started.elapsed().as_secs_f64());
 
     let mut input = PcmStream::open(&args.input)?;
@@ -319,7 +326,16 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::srt_time;
+    use super::{Args, Device, srt_time};
+    use clap::Parser;
+
+    #[test]
+    fn accepts_requested_device() {
+        let args = Args::try_parse_from(["wolfscribe", "audio.wav", "--device", "cuda"]).unwrap();
+        assert_eq!(args.device, Device::Cuda);
+        let defaults = Args::try_parse_from(["wolfscribe", "audio.wav"]).unwrap();
+        assert_eq!(defaults.device, Device::Auto);
+    }
 
     #[test]
     fn formats_subtitle_timestamps() {
