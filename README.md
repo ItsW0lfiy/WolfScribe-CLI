@@ -1,0 +1,1 @@
+# WolfScribe-CLI
