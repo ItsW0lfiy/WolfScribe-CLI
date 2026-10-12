@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::time::Instant;
 
+mod model_download;
+
 const SAMPLE_RATE: usize = 16_000;
 
 /// Transcribe a media file using Parakeet TDT v3. Requires FFmpeg on PATH.
@@ -19,6 +21,10 @@ struct Args {
     /// Optional model directory override. Defaults to per-user application data.
     #[arg(long)]
     model_dir: Option<PathBuf>,
+
+    /// Never download model files. Fail when required files are not installed.
+    #[arg(long)]
+    offline: bool,
 
     /// Number of seconds assigned to each segment.
     #[arg(long, default_value_t = 30)]
@@ -155,7 +161,8 @@ fn srt_time(seconds: f64) -> String {
 }
 
 /// Resolve model weights without requiring the old benchmark folder.
-fn resolve_model_dir(explicit: Option<PathBuf>) -> Result<PathBuf> {
+fn resolve_model_dir(explicit: Option<PathBuf>, offline: bool) -> Result<PathBuf> {
+    let user_supplied = explicit.is_some();
     let directory = if let Some(path) = explicit {
         path
     } else if let Some(value) =
@@ -178,22 +185,7 @@ fn resolve_model_dir(explicit: Option<PathBuf>) -> Result<PathBuf> {
         base.join("wolfscribe").join("models").join("parakeet-tdt-v3")
     };
 
-    if !directory.is_dir() {
-        bail!(
-            "Model directory not found: {}. Install the model there or pass --model-dir.",
-            directory.display()
-        );
-    }
-    for required in [
-        "encoder-model.onnx",
-        "encoder-model.onnx.data",
-        "decoder_joint-model.onnx",
-        "vocab.txt",
-    ] {
-        if !directory.join(required).is_file() {
-            bail!("Missing model file {required} in {}", directory.display());
-        }
-    }
+    model_download::ensure_model_available(&directory, !user_supplied && !offline)?;
     Ok(directory)
 }
 
@@ -202,7 +194,7 @@ fn main() -> Result<()> {
     if !args.input.is_file() {
         bail!("Input file does not exist: {}", args.input.display());
     }
-    let model_dir = resolve_model_dir(args.model_dir)?;
+    let model_dir = resolve_model_dir(args.model_dir, args.offline)?;
     if !(10..=120).contains(&args.chunk_seconds) {
         bail!("--chunk-seconds must be 10 through 120");
     }
