@@ -11,14 +11,14 @@ const SAMPLE_RATE: usize = 16_000;
 
 /// Transcribe a media file using Parakeet TDT v3. Requires FFmpeg on PATH.
 #[derive(Debug, Parser)]
-#[command(version, about)]
+#[command(name = "wolfscribe", version, about)]
 struct Args {
     /// Input audio or video file (any format FFmpeg can decode).
     input: PathBuf,
 
-    /// Directory holding encoder-model.onnx, decoder_joint-model.onnx, etc.
+    /// Optional model directory override. Defaults to per-user application data.
     #[arg(long)]
-    model_dir: PathBuf,
+    model_dir: Option<PathBuf>,
 
     /// Number of seconds assigned to each segment.
     #[arg(long, default_value_t = 30)]
@@ -154,17 +154,55 @@ fn srt_time(seconds: f64) -> String {
     format!("{hours:02}:{minutes:02}:{secs:02},{millis:03}")
 }
 
+/// Resolve model weights without requiring the old benchmark folder.
+fn resolve_model_dir(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    let directory = if let Some(path) = explicit {
+        path
+    } else if let Some(value) =
+        std::env::var_os("WOLFSCRIBE_MODEL_DIR").filter(|value| !value.is_empty())
+    {
+        PathBuf::from(value)
+    } else if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        PathBuf::from(local)
+            .join("WolfScribe")
+            .join("models")
+            .join("parakeet-tdt-v3")
+    } else {
+        let base = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|home| PathBuf::from(home).join(".local").join("share"))
+            })
+            .context("No model directory found; set WOLFSCRIBE_MODEL_DIR or pass --model-dir")?;
+        base.join("wolfscribe").join("models").join("parakeet-tdt-v3")
+    };
+
+    if !directory.is_dir() {
+        bail!(
+            "Model directory not found: {}. Install the model there or pass --model-dir.",
+            directory.display()
+        );
+    }
+    for required in [
+        "encoder-model.onnx",
+        "encoder-model.onnx.data",
+        "decoder_joint-model.onnx",
+        "vocab.txt",
+    ] {
+        if !directory.join(required).is_file() {
+            bail!("Missing model file {required} in {}", directory.display());
+        }
+    }
+    Ok(directory)
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     if !args.input.is_file() {
         bail!("Input file does not exist: {}", args.input.display());
     }
-    if !args.model_dir.is_dir() {
-        bail!(
-            "Model directory does not exist: {}",
-            args.model_dir.display()
-        );
-    }
+    let model_dir = resolve_model_dir(args.model_dir)?;
     if !(10..=120).contains(&args.chunk_seconds) {
         bail!("--chunk-seconds must be 10 through 120");
     }
@@ -176,8 +214,8 @@ fn main() -> Result<()> {
     let chunk_size = args.chunk_seconds * SAMPLE_RATE;
     let context_size = args.context_seconds * SAMPLE_RATE;
 
-    println!("Loading Parakeet TDT from {}", args.model_dir.display());
-    let mut model = ParakeetTDT::from_pretrained(&args.model_dir, None)
+    println!("Loading Parakeet TDT from {}", model_dir.display());
+    let mut model = ParakeetTDT::from_pretrained(&model_dir, None)
         .map_err(|e| anyhow!("Failed loading Parakeet: {e}"))?;
     println!("Model loaded in {:.2}s", started.elapsed().as_secs_f64());
 
@@ -285,4 +323,16 @@ fn main() -> Result<()> {
     println!("SRT: {}", srt_path.display());
     println!("TXT: {}", txt_path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::srt_time;
+
+    #[test]
+    fn formats_subtitle_timestamps() {
+        assert_eq!(srt_time(0.0), "00:00:00,000");
+        assert_eq!(srt_time(61.125), "00:01:01,125");
+        assert_eq!(srt_time(3601.999), "01:00:01,999");
+    }
 }
