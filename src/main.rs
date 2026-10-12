@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use backend::Device;
 use parakeet_rs::{TimestampMode, Transcriber};

@@ -1,6 +1,6 @@
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, anyhow};
 use clap::ValueEnum;
-use parakeet_rs::{ParakeetTDT, Transcriber};
+use parakeet_rs::ParakeetTDT;
 #[cfg(feature = "cuda")]
 use parakeet_rs::ExecutionConfig;
 use std::path::Path;
@@ -50,7 +50,7 @@ fn cuda(model_dir: &Path) -> Result<LoadedModel> {
 
 #[cfg(not(feature = "cuda"))]
 fn cuda(_model_dir: &Path) -> Result<LoadedModel> {
-    bail!("This executable was built without CUDA support. Rebuild with: cargo build --release --features cuda")
+    Err(anyhow!("This executable was built without CUDA support. Rebuild with: cargo build --release --features cuda"))
 }
 
 pub(crate) fn load_model(model_dir: &Path, requested: Device) -> Result<LoadedModel> {
