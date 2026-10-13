@@ -97,6 +97,14 @@ pub(crate) fn activate_cached() -> Result<bool> {
         return Ok(false);
     }
     let canonical = root.join("bin").canonicalize().context("Resolve cached CUDA bin directory")?;
+    add_dll_directory(&canonical)?;
+    Ok(true)
+}
+
+/// Add one explicit trusted DLL directory to the process search path.
+/// The Win32 loader retains the cookie for the lifetime of this process.
+pub(crate) fn add_dll_directory(directory: &Path) -> Result<()> {
+    let canonical = directory.canonicalize().context("Resolve DLL directory")?;
     let mut path: Vec<u16> = canonical.as_os_str().encode_wide().collect();
     path.push(0);
     // LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: app dir, System32 and user-added dirs.
@@ -109,7 +117,7 @@ pub(crate) fn activate_cached() -> Result<bool> {
     if cookie.is_null() {
         bail!("AddDllDirectory failed: {}", io::Error::last_os_error());
     }
-    Ok(true)
+    Ok(())
 }
 
 pub(crate) fn has_nvidia_gpu() -> bool {

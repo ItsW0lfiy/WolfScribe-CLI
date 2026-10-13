@@ -11,6 +11,8 @@ use std::time::Instant;
 mod backend;
 #[cfg(all(windows, feature = "cuda"))]
 mod cuda_runtime;
+#[cfg(all(windows, feature = "cuda"))]
+mod ort_runtime;
 mod ffmpeg;
 mod model_download;
 
@@ -218,6 +220,9 @@ fn main() -> Result<()> {
     let started = Instant::now();
     let chunk_size = args.chunk_seconds * SAMPLE_RATE;
     let context_size = args.context_seconds * SAMPLE_RATE;
+
+    #[cfg(all(windows, feature = "cuda"))]
+    ort_runtime::initialize(args.device, args.offline)?;
 
     println!("Loading Parakeet TDT from {}", model_dir.display());
     let loaded = backend::load_model(&model_dir, args.device, args.offline, args.accept_nvidia_license)?;
