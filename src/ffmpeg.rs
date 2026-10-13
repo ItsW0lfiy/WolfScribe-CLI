@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+#[cfg(test)]
 use std::path::PathBuf;
 
 /// Find an adjacent bundled FFmpeg before consulting PATH. Keep dev-only

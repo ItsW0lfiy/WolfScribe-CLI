@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result, bail};
 use std::env;
-use std::ffi::{OsStr, c_void};
+use std::ffi::c_void;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::os::windows::ffi::OsStrExt;
@@ -152,7 +152,7 @@ fn hash_output(text: &str) -> Option<String> {
 }
 
 fn verified(path: &Path, spec: &Archive) -> Result<bool> {
-    if fs::metadata(path).is_err_or(|meta| !meta.is_file() || meta.len() != spec.size) {
+    if !fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() == spec.size) {
         return Ok(false);
     }
     let out = Command::new("certutil.exe")
