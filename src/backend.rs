@@ -17,6 +17,7 @@ pub(crate) struct LoadedModel {
     pub(crate) model: ParakeetTDT,
     /// Describes registration, not proof every ONNX operator ran on this device.
     pub(crate) backend: &'static str,
+    pub(crate) uses_cuda: bool,
 }
 
 fn cpu(model_dir: &Path) -> Result<LoadedModel> {
@@ -25,6 +26,7 @@ fn cpu(model_dir: &Path) -> Result<LoadedModel> {
     Ok(LoadedModel {
         model,
         backend: "CPU",
+        uses_cuda: false,
     })
 }
 
@@ -45,6 +47,7 @@ fn cuda(model_dir: &Path) -> Result<LoadedModel> {
     Ok(LoadedModel {
         model,
         backend: "CUDA execution provider registered (CPU may handle unsupported operators)",
+        uses_cuda: true,
     })
 }
 
@@ -86,6 +89,20 @@ fn cuda_with_setup(model_dir: &Path, offline: bool, accepted: bool) -> Result<Lo
     }
 }
 
+/// Runtime fallback is for automatically selected CUDA only. Explicit
+/// --device cuda must remain strict and report inference failure.
+pub(crate) fn should_fallback_on_inference_error(requested: Device, uses_cuda: bool) -> bool {
+    requested == Device::Auto && uses_cuda
+}
+
+pub(crate) fn summarize_gpu_failure(error: &str) -> &'static str {
+    if error.contains("cudaErrorNoKernelImageForDevice") {
+        "A CUDA kernel is incompatible with this GPU architecture. This can happen when ONNX Runtime's prebuilt CUDA provider lacks support for your GPU (e.g. RTX 50 / Blackwell). Installing more CUDA DLLs won't fix a missing kernel image."
+    } else {
+        "CUDA inference failed. The automatically selected GPU backend will be retired for the remainder of this run."
+    }
+}
+
 pub(crate) fn load_model(model_dir: &Path, requested: Device, offline: bool, accepted: bool) -> Result<LoadedModel> {
     #[cfg(not(feature = "cuda"))]
     let _ = (offline, accepted);
@@ -117,8 +134,22 @@ pub(crate) fn load_model(model_dir: &Path, requested: Device, offline: bool, acc
 
 #[cfg(test)]
 mod tests {
-    use super::Device;
+    use super::{Device, should_fallback_on_inference_error, summarize_gpu_failure};
     use clap::ValueEnum;
+
+    #[test]
+    fn retries_only_automatically_selected_cuda() {
+        assert!(should_fallback_on_inference_error(Device::Auto, true));
+        assert!(!should_fallback_on_inference_error(Device::Auto, false));
+        assert!(!should_fallback_on_inference_error(Device::Cuda, true));
+        assert!(!should_fallback_on_inference_error(Device::Cpu, false));
+    }
+
+    #[test]
+    fn gives_actionable_missing_kernel_diagnostic() {
+        let description = summarize_gpu_failure("cudaErrorNoKernelImageForDevice: no kernel image");
+        assert!(description.contains("GPU architecture"));
+    }
 
     #[test]
     fn device_options_are_stable() {

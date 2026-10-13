@@ -66,7 +66,7 @@ The `--device` option selects inference mode:
 
 - `cpu` always uses CPU.
 - `cuda` requires a `--features cuda` build and requests **strict CUDA execution-provider registration**. If the provider cannot register, it exits with an error rather than silently benchmarking CPU.
-- `auto` (default) attempts CUDA when compiled with CUDA support. If GPU initialization fails, it offers a pinned, verified first-run NVIDIA runtime download on supported Windows/NVIDIA systems, then falls back to CPU if setup is declined, unavailable or unsuccessful. In a normal CPU-only build, `auto` uses CPU.
+- `auto` (default) attempts CUDA when compiled with CUDA support. If GPU initialization fails, it offers a pinned, verified first-run NVIDIA runtime download on supported Windows/NVIDIA systems, then falls back to CPU if setup is declined, unavailable or unsuccessful. If a CUDA kernel fails **during transcription**, `auto` now discards the GPU session, reloads the CPU backend, and retries the same audio chunk. Previous completed chunks and output remain intact. Explicit `--device cuda` does not silently fall back. In a normal CPU-only build, `auto` uses CPU.
 
 **Important:** A successful CUDA provider registration does **not** guarantee that every model operator runs on the GPU. ONNX Runtime may assign unsupported operators to CPU. The CLI reports the configured backend rather than claiming full GPU utilization; verify usage with `nvidia-smi` and compare elapsed timings.
 
@@ -74,7 +74,7 @@ CUDA builds require an **ONNX Runtime GPU-capable library** and compatible CUDA/
 
 **NVIDIA licenses:** the terminal displays links to CUDA and cuDNN legal terms and prompts for eligible acceptance before first downloading. NVIDIA's SDK license has age/legal-capacity requirements. For CI/noninteractive use, `--accept-nvidia-license` is available only to users legally entitled to accept both agreements. No acceptance means CPU fallback in `auto` mode; explicit `cuda` reports an actionable error. `--offline` never downloads. The app does not alter your driver or global PATH.
 
-The CUDA setup code and automatic retry require testing on an actual NVIDIA GPU. **Do not assume CUDA auto-provisioning is verified yet.** See https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html for NVIDIA/ONNX compatibility details.
+The Windows CUDA downloader has successfully downloaded, SHA-256-verified, and loaded all pinned runtime archives on an RTX 5070 Laptop. However, the prebuilt ONNX Runtime CUDA provider failed on the first GPU kernel launch with `cudaErrorNoKernelImageForDevice`. This may require an ONNX Runtime build with support for NVIDIA Blackwell SM 12.0; downloading additional CUDA runtime archives will not add missing device kernels. **GPU inference is not yet validated.** The new mid-transcription CPU fallback also needs a hardware test. See https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html for NVIDIA/ONNX compatibility details.
 
 The CUDA code compiles in automated CI, but a physical NVIDIA GPU test is still required before declaring acceleration verified. Benchmarks should use the same file, chunk/context settings, and system load, comparing `--device cpu` and `--device cuda`.
 

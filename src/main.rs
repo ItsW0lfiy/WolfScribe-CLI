@@ -222,6 +222,7 @@ fn main() -> Result<()> {
     println!("Loading Parakeet TDT from {}", model_dir.display());
     let loaded = backend::load_model(&model_dir, args.device, args.offline, args.accept_nvidia_license)?;
     println!("Backend: {}", loaded.backend);
+    let mut using_cuda = loaded.uses_cuda;
     let mut model = loaded.model;
     println!("Model loaded in {:.2}s", started.elapsed().as_secs_f64());
 
@@ -256,19 +257,48 @@ fn main() -> Result<()> {
         let last = window_end - input.buffer_start;
         let samples = input.samples[first..last].to_vec();
 
-        let result = model
-            .transcribe_samples(
-                samples,
-                SAMPLE_RATE as u32,
-                1,
-                Some(TimestampMode::Sentences),
-            )
-            .map_err(|e| {
-                anyhow!(
-                    "Transcription failed near {:.1}s: {e}",
-                    core_start as f64 / SAMPLE_RATE as f64
-                )
-            })?;
+        // CUDA may successfully register its execution provider but fail on
+        // the first actual kernel launch (e.g. unsupported Blackwell SM). In
+        // auto mode, retry *this same chunk* on CPU. Already completed chunks
+        // remain on disk, so no transcript content needs to be discarded.
+        let mode = Some(TimestampMode::Sentences);
+        let result = if backend::should_fallback_on_inference_error(args.device, using_cuda) {
+            match model.transcribe_samples(samples.clone(), SAMPLE_RATE as u32, 1, mode) {
+                Ok(result) => result,
+                Err(error) => {
+                    eprintln!(
+                        "CUDA inference failed near {:.1}s: {error}",
+                        core_start as f64 / SAMPLE_RATE as f64
+                    );
+                    eprintln!("{}", backend::summarize_gpu_failure(&error.to_string()));
+                    eprintln!("Switching to CPU and retrying the current audio chunk...");
+                    // Release GPU sessions before allocating CPU model weights.
+                    drop(model);
+                    let fallback = backend::load_model(&model_dir, Device::Cpu, true, false)
+                        .context("GPU inference failed, and CPU fallback could not load the model")?;
+                    model = fallback.model;
+                    using_cuda = false;
+                    eprintln!("Backend: CPU (automatic inference fallback)");
+                    model
+                        .transcribe_samples(samples, SAMPLE_RATE as u32, 1, mode)
+                        .map_err(|cpu_error| {
+                            anyhow!(
+                                "CPU transcription failed near {:.1}s after CUDA fallback: {cpu_error}",
+                                core_start as f64 / SAMPLE_RATE as f64
+                            )
+                        })?
+                }
+            }
+        } else {
+            model
+                .transcribe_samples(samples, SAMPLE_RATE as u32, 1, mode)
+                .map_err(|e| {
+                    anyhow!(
+                        "Transcription failed near {:.1}s: {e}",
+                        core_start as f64 / SAMPLE_RATE as f64
+                    )
+                })?
+        };
 
         // A token belongs to the 30s core interval containing its midpoint.
         // Context helps with words at boundaries; midpoint ownership prevents most duplicates.
