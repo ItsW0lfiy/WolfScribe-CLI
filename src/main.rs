@@ -9,6 +9,7 @@ use std::process::{Child, ChildStdout, Command, Stdio};
 use std::time::Instant;
 
 mod backend;
+mod ffmpeg;
 mod model_download;
 
 const SAMPLE_RATE: usize = 16_000;
@@ -53,7 +54,7 @@ struct PcmStream {
 
 impl PcmStream {
     fn open(input: &PathBuf) -> Result<Self> {
-        let mut child = Command::new("ffmpeg")
+        let mut child = Command::new(ffmpeg::find_ffmpeg())
             .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-i"])
             .arg(input)
             .args([

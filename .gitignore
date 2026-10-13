@@ -15,3 +15,7 @@
 *.vtt
 *.txt
 *.part
+
+# Local FFmpeg binaries are for testing; releases bundle pinned licensed builds.
+/tools/ffmpeg.exe
+/tools/ffmpeg

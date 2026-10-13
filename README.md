@@ -7,11 +7,11 @@ Rust-based, local audio/video transcription using NVIDIA Parakeet TDT 0.6B v3.
 ## Requirements
 
 - Rust toolchain
-- FFmpeg on PATH
+- FFmpeg next to the WolfScribe executable, in the development `tools` folder, or on PATH
 - Internet on first run for the automatic model download (approximately 2.6 GB), or a preinstalled ONNX model
 - `curl` on PATH for the first-run download (included in current Windows 11 installations)
 
-FFmpeg handles decoding for audio and video formats such as WebM, MP4, WAV, MP3, and MKV. The CLI uses in-memory chunks rather than creating temporary WAV files.
+FFmpeg handles decoding for audio and video formats such as WebM, MP4, WAV, MP3, and MKV. WolfScribe first looks beside its executable for a bundled `ffmpeg.exe`, then in the `tools/` directory of the current working directory (developer testing), and finally uses FFmpeg on PATH. Official distributions should package the appropriate licensed FFmpeg executable alongside WolfScribe; do not commit a compiled FFmpeg binary into this source repository. The CLI uses in-memory chunks rather than creating temporary WAV files.
 
 ## Build
 
