@@ -181,10 +181,15 @@ pub(crate) fn initialize(requested: Device, offline: bool) -> Result<()> {
     }
 
     eprintln!("ONNX Runtime: {}", selected.display());
-    ort::init_from(&selected)
+    // ort::EnvironmentBuilder::commit() returns bool in ort 2.0 rc13.
+    // Reject a preinitialized environment because it could have loaded
+    // another ONNX Runtime version before this explicit selection.
+    let initialized = ort::init_from(&selected)
         .map_err(|err| anyhow!("Failed loading ONNX Runtime {}: {err}", selected.display()))?
-        .commit()
-        .context("Could not initialize the selected ONNX Runtime DLL")?;
+        .commit();
+    if !initialized {
+        bail!("ONNX Runtime environment was already initialized before the selected DLL was configured");
+    }
     Ok(())
 }
 
