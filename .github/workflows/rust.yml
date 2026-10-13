@@ -19,3 +19,13 @@ jobs:
         run: cargo check --locked --features cuda
       - name: Test CUDA feature without GPU
         run: cargo test --locked --features cuda
+      - name: Parse developer PowerShell script
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD 'scripts/Test-BlackwellCuda.ps1'),
+            [ref]$tokens, [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) { $errors | Out-String | Write-Error; exit 1 }

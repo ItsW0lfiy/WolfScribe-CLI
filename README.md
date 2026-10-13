@@ -74,9 +74,21 @@ CUDA builds require an **ONNX Runtime GPU-capable library** and compatible CUDA/
 
 **NVIDIA licenses:** the terminal displays links to CUDA and cuDNN legal terms and prompts for eligible acceptance before first downloading. NVIDIA's SDK license has age/legal-capacity requirements. For CI/noninteractive use, `--accept-nvidia-license` is available only to users legally entitled to accept both agreements. No acceptance means CPU fallback in `auto` mode; explicit `cuda` reports an actionable error. `--offline` never downloads. The app does not alter your driver or global PATH.
 
-The Windows CUDA downloader has successfully downloaded, SHA-256-verified, and loaded all pinned runtime archives on an RTX 5070 Laptop. However, the prebuilt ONNX Runtime CUDA provider failed on the first GPU kernel launch with `cudaErrorNoKernelImageForDevice`. This may require an ONNX Runtime build with support for NVIDIA Blackwell SM 12.0; downloading additional CUDA runtime archives will not add missing device kernels. **GPU inference is not yet validated.** The new mid-transcription CPU fallback also needs a hardware test. See https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html for NVIDIA/ONNX compatibility details.
+The Windows CUDA downloader has successfully downloaded, SHA-256-verified, and loaded all pinned runtime archives on an RTX 5070 Laptop. However, the bundled ONNX Runtime 1.28 CUDA provider failed on the first GPU kernel launch with `cudaErrorNoKernelImageForDevice`. The mid-transcription CPU fallback was subsequently validated on the RTX 5070 Laptop: WolfScribe recovered and completed the 60-second test recording. **GPU inference is not yet validated.** See https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html for NVIDIA/ONNX compatibility details.
 
 The CUDA code compiles in automated CI, but a physical NVIDIA GPU test is still required before declaring acceleration verified. Benchmarks should use the same file, chunk/context settings, and system load, comparing `--device cpu` and `--device cuda`.
+
+## Experimental RTX 50 / Blackwell CUDA trial
+
+ONNX Runtime 1.30.0 official Windows CUDA 13 release notes list Blackwell SM 120a support. The current Rust binding targets ONNX Runtime 1.28, so test the newer official DLLs separately before making any release-wide change.
+
+    cargo build --release --locked --features cuda
+    .\scripts\Test-BlackwellCuda.ps1
+    .\target\blackwell-test\wolfscribe.exe 'C:\media\speech.wav' --device cuda --offline
+
+The developer script downloads the official Microsoft 1.30.0 CUDA 13 ZIP (approximately 294 MB), verifies its exact GitHub release size and SHA-256, and copies its three matching DLLs beside a copy of WolfScribe under target/blackwell-test. It does not overwrite target/release, touch system PATH, or change NVIDIA runtime caches. A previously installed/cached NVIDIA CUDA runtime is still needed.
+
+Do not use auto for this test: strict cuda mode makes any remaining GPU error obvious. This is a compatibility experiment, not the finished distributed CUDA installer.
 
 ## Attribution and licensing
 
