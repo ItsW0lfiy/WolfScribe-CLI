@@ -1,8 +1,9 @@
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use backend::Device;
-use parakeet_rs::{TimestampMode, Transcriber};
-use std::fs::File;
+use parakeet_rs::{ParakeetTDT, TimestampMode, Transcriber};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{self, File};
 use std::io::{BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Stdio};
@@ -22,8 +23,9 @@ const SAMPLE_RATE: usize = 16_000;
 #[derive(Debug, Parser)]
 #[command(name = "wolfscribe", version, about)]
 struct Args {
-    /// Input audio or video file (any format FFmpeg can decode).
-    input: PathBuf,
+    /// Input files or directories. Directories include supported media files (not recursive).
+    #[arg(value_name = "INPUT", required = true, num_args = 1..)]
+    inputs: Vec<PathBuf>,
 
     /// Optional model directory override. Defaults to per-user application data.
     #[arg(long)]
@@ -204,36 +206,67 @@ fn resolve_model_dir(explicit: Option<PathBuf>, offline: bool) -> Result<PathBuf
     Ok(directory)
 }
 
-fn main() -> Result<()> {
-    let args = Args::parse();
-    if !args.input.is_file() {
-        bail!("Input file does not exist: {}", args.input.display());
+/// Enumerate positional files and immediate children of directories exactly once.
+/// Reject output collisions before opening any output file.
+fn expand_inputs(inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    const MEDIA: [&str; 17] = [
+        "aac", "avi", "flac", "m4a", "mka", "mkv", "mov", "mp3", "mp4",
+        "mpeg", "mpg", "ogg", "opus", "ts", "wav", "webm", "wma",
+    ];
+    let mut selected = BTreeSet::new();
+    for input in inputs {
+        if input.is_file() {
+            selected.insert(input.canonicalize().with_context(|| format!("Resolve {}", input.display()))?);
+        } else if input.is_dir() {
+            let mut included = 0;
+            for entry in fs::read_dir(input).with_context(|| format!("Read directory {}", input.display()))? {
+                let path = entry?.path();
+                if path.is_file()
+                    && path.extension().and_then(|ext| ext.to_str())
+                        .is_some_and(|ext| MEDIA.contains(&ext.to_ascii_lowercase().as_str()))
+                {
+                    selected.insert(path.canonicalize()?);
+                    included += 1;
+                }
+            }
+            if included == 0 {
+                bail!("Directory contains no supported media files: {}", input.display());
+            }
+        } else {
+            bail!("Input is not a file or directory: {}", input.display());
+        }
     }
-    let model_dir = resolve_model_dir(args.model_dir, args.offline)?;
-    if !(10..=120).contains(&args.chunk_seconds) {
-        bail!("--chunk-seconds must be 10 through 120");
+    if selected.is_empty() {
+        bail!("No input files provided");
     }
-    if args.context_seconds >= args.chunk_seconds / 2 {
-        bail!("--context-seconds must be less than half --chunk-seconds");
+    let mut outputs = BTreeMap::<PathBuf, PathBuf>::new();
+    for input in &selected {
+        let srt = input.with_extension("srt");
+        if let Some(other) = outputs.insert(srt.clone(), input.clone()) {
+            bail!(
+                "Output name conflict: {} and {} would both write {}. Rename one input.",
+                other.display(), input.display(), srt.display()
+            );
+        }
     }
+    Ok(selected.into_iter().collect())
+}
 
+/// Reuse a single loaded Parakeet session for every file in a batch.
+/// Audio state and subtitle timestamps always reset between input files.
+fn transcribe_file(
+    input_path: &PathBuf,
+    model_dir: &std::path::Path,
+    model: &mut Option<ParakeetTDT>,
+    using_cuda: &mut bool,
+    args: &Args,
+) -> Result<()> {
     let started = Instant::now();
     let chunk_size = args.chunk_seconds * SAMPLE_RATE;
     let context_size = args.context_seconds * SAMPLE_RATE;
-
-    #[cfg(all(windows, feature = "cuda"))]
-    ort_runtime::initialize(args.device, args.offline)?;
-
-    println!("Loading Parakeet TDT from {}", model_dir.display());
-    let loaded = backend::load_model(&model_dir, args.device, args.offline, args.accept_nvidia_license)?;
-    println!("Backend: {}", loaded.backend);
-    let mut using_cuda = loaded.uses_cuda;
-    let mut model = loaded.model;
-    println!("Model loaded in {:.2}s", started.elapsed().as_secs_f64());
-
-    let mut input = PcmStream::open(&args.input)?;
-    let srt_path = args.input.with_extension("srt");
-    let txt_path = args.input.with_extension("txt");
+    let mut input = PcmStream::open(input_path)?;
+    let srt_path = input_path.with_extension("srt");
+    let txt_path = input_path.with_extension("txt");
     let mut srt = BufWriter::new(
         File::create(&srt_path).with_context(|| format!("Creating {}", srt_path.display()))?,
     );
@@ -267,8 +300,8 @@ fn main() -> Result<()> {
         // auto mode, retry *this same chunk* on CPU. Already completed chunks
         // remain on disk, so no transcript content needs to be discarded.
         let mode = Some(TimestampMode::Sentences);
-        let result = if backend::should_fallback_on_inference_error(args.device, using_cuda) {
-            match model.transcribe_samples(samples.clone(), SAMPLE_RATE as u32, 1, mode) {
+        let result = if backend::should_fallback_on_inference_error(args.device, *using_cuda) {
+            match model.as_mut().expect("Model is loaded").transcribe_samples(samples.clone(), SAMPLE_RATE as u32, 1, mode) {
                 Ok(result) => result,
                 Err(error) => {
                     eprintln!(
@@ -278,13 +311,13 @@ fn main() -> Result<()> {
                     eprintln!("{}", backend::summarize_gpu_failure(&error.to_string()));
                     eprintln!("Switching to CPU and retrying the current audio chunk...");
                     // Release GPU sessions before allocating CPU model weights.
-                    drop(model);
+                    drop(model.take());
                     let fallback = backend::load_model(&model_dir, Device::Cpu, true, false)
                         .context("GPU inference failed, and CPU fallback could not load the model")?;
-                    model = fallback.model;
-                    using_cuda = false;
+                    *model = Some(fallback.model);
+                    *using_cuda = false;
                     eprintln!("Backend: CPU (automatic inference fallback)");
-                    model
+                    model.as_mut().expect("CPU fallback is loaded")
                         .transcribe_samples(samples, SAMPLE_RATE as u32, 1, mode)
                         .map_err(|cpu_error| {
                             anyhow!(
@@ -295,7 +328,7 @@ fn main() -> Result<()> {
                 }
             }
         } else {
-            model
+            model.as_mut().expect("Model is loaded")
                 .transcribe_samples(samples, SAMPLE_RATE as u32, 1, mode)
                 .map_err(|e| {
                     anyhow!(
@@ -360,15 +393,58 @@ fn main() -> Result<()> {
     input.finish()?;
     srt.flush()?;
     txt.flush()?;
-    println!("\nDone in {:.2}s", started.elapsed().as_secs_f64());
+    println!("\nFile completed in {:.2}s", started.elapsed().as_secs_f64());
     println!("SRT: {}", srt_path.display());
     println!("TXT: {}", txt_path.display());
+    Ok(())
+}
+}
+
+fn main() -> Result<()> {
+    let args = Args::parse();
+    if !(10..=120).contains(&args.chunk_seconds) {
+        bail!("--chunk-seconds must be 10 through 120");
+    }
+    if args.context_seconds >= args.chunk_seconds / 2 {
+        bail!("--context-seconds must be less than half --chunk-seconds");
+    }
+    let inputs = expand_inputs(&args.inputs)?;
+    let model_dir = resolve_model_dir(args.model_dir.clone(), args.offline)?;
+    let total_started = Instant::now();
+
+    #[cfg(all(windows, feature = "cuda"))]
+    ort_runtime::initialize(args.device, args.offline)?;
+
+    println!("Loading Parakeet TDT from {}", model_dir.display());
+    let loaded = backend::load_model(&model_dir, args.device, args.offline, args.accept_nvidia_license)?;
+    println!("Backend: {}", loaded.backend);
+    let mut using_cuda = loaded.uses_cuda;
+    let mut model = Some(loaded.model);
+    println!("Model loaded in {:.2}s", total_started.elapsed().as_secs_f64());
+    println!("Processing {} input file(s) with one loaded model", inputs.len());
+
+    let mut failures = 0usize;
+    for (index, input_path) in inputs.iter().enumerate() {
+        println!("\n[{}/{}] {}", index + 1, inputs.len(), input_path.display());
+        if let Err(error) = transcribe_file(input_path, &model_dir, &mut model, &mut using_cuda, &args) {
+            failures += 1;
+            eprintln!("Failed {}: {error:#}", input_path.display());
+        }
+    }
+    println!(
+        "\nBatch completed: {} succeeded, {} failed, total {:.2}s",
+        inputs.len() - failures, failures, total_started.elapsed().as_secs_f64()
+    );
+    if failures > 0 {
+        bail!("{failures} input file(s) failed");
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, Device, srt_time};
+    use super::{Args, Device, expand_inputs, srt_time};
+    use std::fs;
     use clap::Parser;
 
     #[test]
@@ -377,6 +453,35 @@ mod tests {
         assert_eq!(args.device, Device::Cuda);
         let defaults = Args::try_parse_from(["wolfscribe", "audio.wav"]).unwrap();
         assert_eq!(defaults.device, Device::Auto);
+        assert_eq!(defaults.inputs.len(), 1);
+        let batch = Args::try_parse_from(["wolfscribe", "first.webm", "second.mp3", "--device", "auto"]).unwrap();
+        assert_eq!(batch.inputs.len(), 2);
+    }
+
+    #[test]
+    fn batch_directory_and_duplicate_inputs() {
+        let dir = std::env::temp_dir().join(format!("wolfscribe-batch-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("audio.wav");
+        let b = dir.join("other.webm");
+        let ignored = dir.join("notes.txt");
+        for f in [&a, &b, &ignored] { fs::write(f, b"test").unwrap(); }
+        let inputs = expand_inputs(&[dir.clone(), a.clone()]).unwrap();
+        assert_eq!(inputs.len(), 2);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rejects_colliding_subtitle_names() {
+        let dir = std::env::temp_dir().join(format!("wolfscribe-collision-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("same.mp3");
+        let b = dir.join("same.webm");
+        fs::write(&a, b"test").unwrap();
+        fs::write(&b, b"test").unwrap();
+        let result = expand_inputs(&[a, b]);
+        assert!(result.is_err());
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
