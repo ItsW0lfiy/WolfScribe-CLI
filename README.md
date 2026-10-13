@@ -2,7 +2,7 @@
 
 Rust-based, local audio/video transcription using NVIDIA Parakeet TDT 0.6B v3.
 
-**Status: experimental v0.1 prototype.** CPU long-form transcription works, but subtitle timing and boundary deduplication still need verification. Optional CUDA backend support has been added, but GPU inference and performance have not yet been verified on physical hardware. The first-run model downloader completed a clean-install test on a Windows desktop.
+**Status: v0.1 release candidate.** Windows RTX 5070 CUDA inference is verified with integrated ONNX Runtime 1.30.0, including a 33-minute WebM processed successfully in 16 seconds. CPU fallback is implemented; subtitle timing, boundary deduplication and first-release packaging need final verification.
 
 ## Requirements
 
@@ -56,6 +56,50 @@ Optionally set WOLFSCRIBE_MODEL_DIR to override the default model path. Advanced
 
 The prototype writes SRT and TXT beside the input. **Existing outputs are overwritten.** Back up valuable transcripts before rerunning.
 
+## Batch transcription
+
+Process several files or one directory without loading Parakeet for each file:
+
+    .\target\release\wolfscribe.exe 'C:\Recordings\one.wav' 'C:\Recordings\two.webm'
+    .\target\release\wolfscribe.exe 'C:\Recordings' --device auto
+
+Directories are non-recursive. Supported media extensions are discovered
+automatically; direct file paths may use any format FFmpeg can decode.
+Duplicate paths are ignored. Every input gets its own SRT/TXT beside the
+media file. Existing output files are overwritten. A collision (such as
+same.mp4 and same.webm producing the same SRT) is rejected before processing.
+When one file fails, the rest are still processed, and the final exit status
+reports failure.
+
+## First public release (preparation)
+
+The public v0.1.0 release is not published yet. The project owner must
+select and approve a source LICENSE, and the distributable must pass final
+smoke tests. The GitHub Actions **Build Windows Release** workflow creates
+an unsigned Windows x64 portable ZIP on manual invocation. After license
+approval, pushing a matching version tag (v0.1.0) also publishes a GitHub
+release automatically.
+
+The package contains WolfScribe, the official SHA-256-verified Microsoft
+ONNX Runtime 1.30 CUDA 13 DLLs (including CPU fallback), notices and
+licenses. It deliberately does not bundle NVIDIA's ~1.33-GB CUDA/cuDNN
+components or Parakeet's ~2.6-GB model; those are provisioned as needed
+with their separate licenses. FFmpeg is an external dependency instead of
+being bundled under another project's GPL distribution obligations. Install:
+
+    winget install --id Gyan.FFmpeg.Essentials -e
+
+For WinGet publication, once the GitHub release ZIP is downloadable,
+generate versioned manifests with the **actual ZIP hash**, e.g.:
+
+    .\scripts\New-WingetManifest.ps1 -ZipPath .\target\dist\WolfScribe-CLI-0.1.0-windows-x64.zip -Version 0.1.0 -License 'APPROVED_SPDX_ID'
+    winget validate --manifest .\target\winget-manifests\manifests\i\ItsW0lfiy\WolfScribe\0.1.0
+
+Then test installation from the manifest and submit its three files in a
+single PR to https://github.com/microsoft/winget-pkgs. Inclusion in the
+public WinGet catalog is subject to independent Microsoft approval.
+No placeholder asset URL or fabricated SHA-256 may be submitted.
+
 ## CPU and CUDA backends
 
 The `--device` option selects inference mode:
@@ -74,9 +118,9 @@ CUDA builds require an **ONNX Runtime GPU-capable library** and compatible CUDA/
 
 **NVIDIA licenses:** the terminal displays links to CUDA and cuDNN legal terms and prompts for eligible acceptance before first downloading. NVIDIA's SDK license has age/legal-capacity requirements. For CI/noninteractive use, `--accept-nvidia-license` is available only to users legally entitled to accept both agreements. No acceptance means CPU fallback in `auto` mode; explicit `cuda` reports an actionable error. `--offline` never downloads. The app does not alter your driver or global PATH.
 
-WolfScribe now dynamically loads **ONNX Runtime 1.30.0 CUDA 13** from a verified versioned per-user cache on Windows when compiled with `--features cuda` (or from a packaged `runtime/` directory if present). Its official Windows binary has successfully completed GPU transcription on an RTX 5070 Laptop. This same runtime is now used by the normal executable instead of requiring `target/blackwell-test`; the integrated path still needs a final hardware test. CUDA downloads are automatic on first run unless `--offline` is set. The mid-transcription CPU fallback has also been validated. See https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html for NVIDIA/ONNX compatibility details.
+WolfScribe now dynamically loads **ONNX Runtime 1.30.0 CUDA 13** from a verified versioned per-user cache on Windows when compiled with `--features cuda` (or from a packaged `runtime/` directory if present). Its official Windows binary has successfully completed GPU transcription on an RTX 5070 Laptop. This same runtime is now used by the normal executable instead of requiring `target/blackwell-test`; the integrated path has passed physical RTX 5070 hardware tests. CUDA downloads are automatic on first run unless `--offline` is set. The mid-transcription CPU fallback has also been validated. See https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html for NVIDIA/ONNX compatibility details.
 
-The CUDA code compiles in automated CI, but a physical NVIDIA GPU test is still required before declaring acceleration verified. Benchmarks should use the same file, chunk/context settings, and system load, comparing `--device cpu` and `--device cuda`.
+CUDA builds pass CI and CUDA inference has been verified on an RTX 5070 Laptop. Benchmarks should use the same file, chunk/context settings, and system load, comparing `--device cpu` and `--device cuda`.
 
 ## Experimental RTX 50 / Blackwell CUDA trial
 

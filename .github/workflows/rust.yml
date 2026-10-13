@@ -29,3 +29,15 @@ jobs:
             [ref]$tokens, [ref]$errors
           ) | Out-Null
           if ($errors.Count -gt 0) { $errors | Out-String | Write-Error; exit 1 }
+
+      - name: Parse release PowerShell scripts
+        shell: pwsh
+        run: |
+          foreach ($script in @('scripts/Build-WindowsRelease.ps1', 'scripts/New-WingetManifest.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Join-Path $PWD $script), [ref]$tokens, [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) { $errors | Out-String | Write-Error; exit 1 }
+          }
