@@ -9,6 +9,8 @@ use std::process::{Child, ChildStdout, Command, Stdio};
 use std::time::Instant;
 
 mod backend;
+#[cfg(all(windows, feature = "cuda"))]
+mod cuda_runtime;
 mod ffmpeg;
 mod model_download;
 
@@ -32,6 +34,10 @@ struct Args {
     /// Inference backend: auto tries CUDA in CUDA-enabled builds, then CPU.
     #[arg(long, value_enum, default_value_t = Device::Auto)]
     device: Device,
+
+    /// Authorize NVIDIA runtime download only if legally eligible and licenses accepted.
+    #[arg(long)]
+    accept_nvidia_license: bool,
 
     /// Number of seconds assigned to each segment.
     #[arg(long, default_value_t = 30)]
@@ -214,7 +220,7 @@ fn main() -> Result<()> {
     let context_size = args.context_seconds * SAMPLE_RATE;
 
     println!("Loading Parakeet TDT from {}", model_dir.display());
-    let loaded = backend::load_model(&model_dir, args.device)?;
+    let loaded = backend::load_model(&model_dir, args.device, args.offline, args.accept_nvidia_license)?;
     println!("Backend: {}", loaded.backend);
     let mut model = loaded.model;
     println!("Model loaded in {:.2}s", started.elapsed().as_secs_f64());

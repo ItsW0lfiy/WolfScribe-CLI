@@ -53,20 +53,58 @@ fn cuda(_model_dir: &Path) -> Result<LoadedModel> {
     Err(anyhow!("This executable was built without CUDA support. Rebuild with: cargo build --release --features cuda"))
 }
 
-pub(crate) fn load_model(model_dir: &Path, requested: Device) -> Result<LoadedModel> {
+#[cfg(feature = "cuda")]
+fn cuda_with_setup(model_dir: &Path, offline: bool, accepted: bool) -> Result<LoadedModel> {
+    #[cfg(windows)]
+    if let Err(error) = crate::cuda_runtime::activate_cached() {
+        eprintln!("Cached CUDA runtime could not be activated: {error}");
+    }
+    match cuda(model_dir) {
+        Ok(model) => Ok(model),
+        Err(first_error) => {
+            #[cfg(windows)]
+            {
+                let message = first_error.to_string();
+                // Provision runtime libraries only for missing native DLLs,
+                // not for OOM, incompatible GPU, or unrelated model errors.
+                let missing_library = message.contains("which is missing")
+                    || message.contains("Error 126")
+                    || message.contains("The specified module could not be found");
+                if missing_library && !offline {
+                    let installed = crate::cuda_runtime::install(false, accepted)
+                        .map_err(|setup| anyhow!("CUDA initialization failed: {first_error}. Automatic CUDA setup failed: {setup}"))?;
+                    if installed {
+                        return cuda(model_dir).map_err(|retry| {
+                            anyhow!("CUDA libraries installed, but CUDA initialization still failed: {retry}")
+                        });
+                    }
+                    return Err(anyhow!("CUDA libraries missing; NVIDIA license/download was not accepted. {first_error}"));
+                }
+            }
+            Err(anyhow!("CUDA cannot initialize: {first_error}{}", if offline { " (--offline prevents automatic CUDA setup)" } else { "" }))
+        }
+    }
+}
+
+pub(crate) fn load_model(model_dir: &Path, requested: Device, offline: bool, accepted: bool) -> Result<LoadedModel> {
+    #[cfg(not(feature = "cuda"))]
+    let _ = (offline, accepted);
+
     match requested {
         Device::Cpu => cpu(model_dir),
-        Device::Cuda => cuda(model_dir),
+        Device::Cuda => {
+            #[cfg(feature = "cuda")]
+            { cuda_with_setup(model_dir, offline, accepted) }
+            #[cfg(not(feature = "cuda"))]
+            { cuda(model_dir) }
+        }
         Device::Auto => {
             #[cfg(feature = "cuda")]
             {
-                match cuda(model_dir) {
+                match cuda_with_setup(model_dir, offline, accepted) {
                     Ok(loaded) => return Ok(loaded),
                     Err(error) => {
-                        eprintln!(
-                            "CUDA unavailable ({error}). Falling back to CPU. \
-                             Use --device cuda to make CUDA failure fatal."
-                        );
+                        eprintln!("CUDA unavailable ({error}). Falling back to CPU.");
                     }
                 }
             }

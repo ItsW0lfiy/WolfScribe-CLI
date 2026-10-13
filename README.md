@@ -66,11 +66,15 @@ The `--device` option selects inference mode:
 
 - `cpu` always uses CPU.
 - `cuda` requires a `--features cuda` build and requests **strict CUDA execution-provider registration**. If the provider cannot register, it exits with an error rather than silently benchmarking CPU.
-- `auto` (default) attempts CUDA when compiled with CUDA support. If GPU initialization fails, it explains why and falls back to CPU. In a normal CPU-only build, `auto` uses CPU.
+- `auto` (default) attempts CUDA when compiled with CUDA support. If GPU initialization fails, it offers a pinned, verified first-run NVIDIA runtime download on supported Windows/NVIDIA systems, then falls back to CPU if setup is declined, unavailable or unsuccessful. In a normal CPU-only build, `auto` uses CPU.
 
 **Important:** A successful CUDA provider registration does **not** guarantee that every model operator runs on the GPU. ONNX Runtime may assign unsupported operators to CPU. The CLI reports the configured backend rather than claiming full GPU utilization; verify usage with `nvidia-smi` and compare elapsed timings.
 
-CUDA builds require an **ONNX Runtime GPU-capable library** and compatible CUDA/cuDNN runtime DLLs discoverable by Windows. Merely installing an NVIDIA graphics driver or seeing a CUDA version in `nvidia-smi` is not enough. The dependency versions must be compatible with the ONNX Runtime build; see https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html. If registration fails, `--device auto` can still run on CPU.
+CUDA builds require an **ONNX Runtime GPU-capable library** and compatible CUDA/cuDNN runtime DLLs. On Windows x64, WolfScribe can download NVIDIA CUDA 13.0 component archives and cuDNN 9.17.1 from official NVIDIA distribution URLs with pinned archive sizes and SHA-256 hashes. The runtime is extracted to `%LOCALAPPDATA%\WolfScribe\runtimes\`, not system-wide. Downloads use Windows built-in `curl.exe`, `certutil.exe` and `tar.exe`. The first download is approximately 1.33 GB compressed, in addition to the speech model; provide enough free space for extraction.
+
+**NVIDIA licenses:** the terminal displays links to CUDA and cuDNN legal terms and prompts for eligible acceptance before first downloading. NVIDIA's SDK license has age/legal-capacity requirements. For CI/noninteractive use, `--accept-nvidia-license` is available only to users legally entitled to accept both agreements. No acceptance means CPU fallback in `auto` mode; explicit `cuda` reports an actionable error. `--offline` never downloads. The app does not alter your driver or global PATH.
+
+The CUDA setup code and automatic retry require testing on an actual NVIDIA GPU. **Do not assume CUDA auto-provisioning is verified yet.** See https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html for NVIDIA/ONNX compatibility details.
 
 The CUDA code compiles in automated CI, but a physical NVIDIA GPU test is still required before declaring acceleration verified. Benchmarks should use the same file, chunk/context settings, and system load, comparing `--device cpu` and `--device cuda`.
 
