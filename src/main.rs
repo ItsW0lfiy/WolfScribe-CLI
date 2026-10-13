@@ -398,7 +398,6 @@ fn transcribe_file(
     println!("TXT: {}", txt_path.display());
     Ok(())
 }
-}
 
 fn main() -> Result<()> {
     let args = Args::parse();
